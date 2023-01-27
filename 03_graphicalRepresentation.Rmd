@@ -1,0 +1,411 @@
+---
+title: "Microlithiasis predictive score"
+subtitle: "__(Graphical representation)__"
+author: "_umahajan_"
+date:  "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+   html_notebook: 
+    theme: united
+    number_sections: yes
+    toc: yes
+    toc_depth: 4
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+chooseCRANmirror(graphics = TRUE, ind = 1)
+knitr::opts_chunk$set(
+  tidy.opts = list(width.cutoff = 85),
+  tidy = TRUE,
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  cache = FALSE
+)
+```
+
+# data preparation
+
+## load working directory
+```{r working dir, include=FALSE}
+rm(list = ls())
+start_time <- Sys.time()
+here::here()
+```
+
+## load packages
+```{r packages}
+# load packages --------------------------------------------------------------------
+scriptLibraries <-  c(
+  "rmarkdown",
+    "knitr",
+    "kableExtra",
+    "dplyr",
+    "tidyr",
+    "ggplot2",
+    "ggbeeswarm",
+    "arsenal",
+    "RColorBrewer",
+    "h2o",
+    "caret",
+    "lime",
+    "purrr",
+    "tibble",
+    "sjPlot",
+    "fmsb",
+    "auctestr"
+)
+# load functions -------------------------------------------------------------------
+source("./functions/basicFunctions.R")
+# load packages --------------------------------------------------------------------
+installScriptLibs(scriptLibraries)
+# basic theme  ---------------------------------------------------------------------
+ggplot_theme <- theme_bw() +
+  theme(
+    axis.line = element_line(size = 0.75),
+    axis.text = element_text(
+      size = 11,
+      face = "bold",
+      colour = "black"
+    ),
+    axis.title = element_text(size = 12, face = "bold")
+  )
+# initiate h2o ---------------------------------------------------------------------
+# detect the number of cores available - 1 -----------------------------------------
+myCores = parallel::detectCores(all.tests = TRUE) - 1
+# set memory -----------------------------------------------------------------------
+if (myCores > 20) {
+  myCores = 20
+} else
+  myCores = myCores
+# set environment ------------------------------------------------------------------
+#Sys.setenv(JAVA_HOME = "/dss/dsshome1/lxc00/ru64waf2/bin/jdk-13.0.2")
+h2o.init()
+h2o.no_progress()
+h2o.removeAll()
+```
+
+## load dataset and preparation for modelling
+```{r data}
+# load test and train data ----------------------------------------------------------
+train <- read.csv("./Data/splitData/train.csv",check.names = FALSE)
+# train[] <- lapply(train[], as.factor)
+train <- as.h2o(train)
+
+# define response variable ----------------------------------------------------------
+response <- "Diagnosis"
+
+# define features -------------------------------------------------------------------
+features <- setdiff(colnames(train), response)
+test <- read.csv("./Data/splitData/test.csv", check.names = FALSE)
+# test[] <- lapply(test[], as.factor)
+test <- as.h2o(test)
+```
+
+## load models
+```{r models}
+model.base <-
+  h2o.loadModel("./h2o_results/base/GBM_2_AutoML_20220706_153222")
+
+model.itr <-
+  h2o.loadModel("./h2o_results/iteration/GBM_grid__1_AutoML_20220706_153327_model_2")
+```
+
+# base learner 
+
+## odd's ratio
+```{r}
+features.base <- model.base@parameters$x
+features.base
+## training set AUC +/- sd -----------------------------------------------------------
+auc <- model.base@model$training_metrics@metrics$AUC
+n_p <- model.base@model$training_metrics@metrics$cm$table[3,2]
+n_n <- model.base@model$training_metrics@metrics$cm$table[3,1]
+se_auc(auc, n_p, n_n)
+
+### performance ----------------------------------------------------------------------
+perf.base <- h2o.performance(model.base, newdata = test)
+
+### performance odds ratio -----------------------------------------------------------
+cm <- as.data.frame(h2o.confusionMatrix(perf.base))
+
+lvs <- c("microlithiasis", "other")
+truth <-
+  factor(rep(lvs, times = c(cm$microlithiasis[1] + cm$other[1], cm$microlithiasis[2] + cm$other[2])),
+         levels = rev(lvs))
+pred <- factor(c(rep(lvs, times = c(cm$microlithiasis[1], cm$other[1])),
+                 rep(lvs, times = c(cm$microlithiasis[2], cm$other[2]))),
+               levels = rev(lvs))
+
+xtab <- table(pred, truth)
+
+confusionMatrix(xtab)
+
+or <- oddsratio(xtab)
+or$estimate
+or$conf.int[1]
+or$conf.int[2]
+```
+
+## feature importance
+```{r}
+### feature importance ---------------------------------------------------------------
+features.imp.base <- data.frame(model.base@model$variable_importances)
+#### clear names
+features.imp.base$variable <-
+  gsub("Chr_", "", features.imp.base$variable)
+p <-
+  ggplot(features.imp.base, aes(x = reorder(variable, scaled_importance), y =
+                                 scaled_importance)) +
+  geom_bar(
+    stat = 'identity',
+    fill = ifelse(
+      features.imp.base$relative_importance > 8.3,
+      "#00A1D5FF",
+      ifelse(
+        features.imp.base$relative_importance < 4,
+        "#374E55FF",
+        "#DF8F44FF"
+      )
+    )
+  ) +
+  coord_flip() +
+  theme_classic() +
+  theme(
+    axis.line = element_line(size = 0.75),
+    axis.text.x = element_text(
+      size = 11,
+      face = "bold",
+      colour = "black"
+    ),
+    axis.text.y = element_text(size = 9, colour = "black"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.ticks.length.y = unit(0, "cm")
+  ) +
+  xlab(NULL) +
+  ylab("Scaled importance") +
+  geom_label(
+    aes(label = round(relative_importance, 1)),
+    size = 2,
+    fill = ifelse(
+      features.imp.base$relative_importance > 8.3,
+      "#00A1D5FF",
+      ifelse(
+        features.imp.base$relative_importance < 4,
+        "#79AF97FF",
+        "#DF8F44FF"
+      )
+    )
+  ) +
+  scale_y_continuous(expand = c(0, 0))
+
+print(p)
+
+save_plot(
+  "var_imp_base.svg",
+  fig = p,
+  width = 16,
+  height = 20,
+  dpi = 300
+)
+```
+
+# itr learner
+
+## odd's ratio
+```{r}
+features.itr <- model.itr@parameters$x
+features.itr
+## training set AUC +/- sd -----------------------------------------------------------
+auc <- model.itr@model$training_metrics@metrics$AUC
+n_p <- model.itr@model$training_metrics@metrics$cm$table[3,2]
+n_n <- model.itr@model$training_metrics@metrics$cm$table[3,1]
+se_auc(auc, n_p, n_n)
+
+### performance ----------------------------------------------------------------------
+perf.itr <- h2o.performance(model.itr, newdata = test)
+
+### performance odds ratio -----------------------------------------------------------
+cm <- as.data.frame(h2o.confusionMatrix(perf.itr))
+
+lvs <- c("microlithiasis", "other")
+truth <-
+  factor(rep(lvs, times = c(cm$microlithiasis[1] + cm$other[1], cm$microlithiasis[2] + cm$other[2])),
+         levels = rev(lvs))
+pred <- factor(c(rep(lvs, times = c(cm$microlithiasis[1], cm$other[1])),
+                 rep(lvs, times = c(cm$microlithiasis[2], cm$other[2]))),
+               levels = rev(lvs))
+
+xtab <- table(pred, truth)
+
+confusionMatrix(xtab)
+
+or <- oddsratio(xtab)
+or$estimate
+or$conf.int[1]
+or$conf.int[2]
+```
+
+## feature importance
+```{r}
+### feature importance ---------------------------------------------------------------
+features.imp.itr <- data.frame(model.itr@model$variable_importances)
+#### clear names
+features.imp.itr$variable <-
+  gsub("Chr_", "", features.imp.itr$variable)
+p <-
+  ggplot(features.imp.itr, aes(x = reorder(variable, scaled_importance), y =
+                                 scaled_importance)) +
+  geom_bar(
+    stat = 'identity',
+    fill = ifelse(
+      features.imp.itr$relative_importance > 8.3,
+      "#00A1D5FF",
+      ifelse(
+        features.imp.itr$relative_importance < 4,
+        "#374E55FF",
+        "#DF8F44FF"
+      )
+    )
+  ) +
+  coord_flip() +
+  theme_classic() +
+  theme(
+    axis.line = element_line(size = 0.75),
+    axis.text.x = element_text(
+      size = 11,
+      face = "bold",
+      colour = "black"
+    ),
+    axis.text.y = element_text(size = 9, colour = "black"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.ticks.length.y = unit(0, "cm")
+  ) +
+  xlab(NULL) +
+  ylab("Scaled importance") +
+  geom_label(
+    aes(label = round(relative_importance, 1)),
+    size = 2,
+    fill = ifelse(
+      features.imp.itr$relative_importance > 8.3,
+      "#00A1D5FF",
+      ifelse(
+        features.imp.itr$relative_importance < 4,
+        "#79AF97FF",
+        "#DF8F44FF"
+      )
+    )
+  ) +
+  scale_y_continuous(expand = c(0, 0))
+
+print(p)
+
+save_plot(
+  "var_imp_itr.svg",
+  fig = p,
+  width = 7,
+  height = 9,
+  dpi = 300
+)
+```
+
+## roc
+```{r}
+p <-
+  list(perf.base, perf.itr) %>%
+  map(
+    function(x)
+      x %>%
+      .@metrics %>%
+      .$thresholds_and_metric_scores %>%
+      .[c('tpr', 'fpr')] %>%
+      add_row(tpr = 0, fpr = 0, .before = T) %>%
+      add_row(tpr = 0, fpr = 0, .before = F)
+  ) %>%
+  map2(c("Base model", "Iterated model"),
+       function(x, y)
+         x %>%
+         add_column(model = y)) %>%
+  reduce(rbind) %>%
+  # plot fpr and tpr, map model to color as grouping
+  ggplot(aes(fpr, tpr, col = model)) +
+  geom_line(size = 1.5) +
+  geom_segment(aes(
+    x = 0,
+    y = 0,
+    xend = 1,
+    yend = 1
+  ),
+  linetype = 2,
+  col = '#80796BFF') +
+  xlab('False Positive Rate') +
+  ylab('True Positive Rate') +
+  ggtitle('Comparision of ROC curves of different learners') +
+  theme_classic() +
+  ggsci::scale_color_jama() +
+  theme(
+    axis.line = element_line(size = 0.75),
+    axis.text = element_text(
+      size = 11,
+      face = "bold",
+      colour = "black"
+    ),
+    axis.title = element_text(size = 12, face = "bold"),
+    legend.title =  element_text(
+      size = 12,
+      face = "bold",
+      colour = "black"
+    ),
+    legend.text = element_text(
+      size = 11,
+      face = "bold",
+      colour = "black"
+    )
+  ) +
+  theme(legend.position = c(0.75, 0.25))
+
+print(p)
+
+save_plot(
+  "ROC.svg",
+  fig = p,
+  width = 8,
+  height = 8,
+  dpi = 300
+)
+```
+
+<!-- ## shap summary plot -->
+<!-- ```{r} -->
+<!-- # Create the SHAP summary plot -->
+<!-- shap_summary_plot <- h2o.shap_summary_plot(model.itr, test) -->
+<!-- print(shap_summary_plot) -->
+
+<!-- shapr_plot <- h2o.shap_explain_row_plot(model.itr, test, row_index = 5) -->
+<!-- shapr_plot -->
+
+<!-- for (i in features.itr) { -->
+<!-- print(i) -->
+<!-- pd_plot <- h2o.partialPlot(model.itr, test, cols= i) -->
+<!-- print(pd_plot) -->
+
+<!-- pd_plot <- h2o.pd_multi_plot(model.itr, test, i) -->
+<!-- print(pd_plot) -->
+
+<!-- ice_plot <- h2o.ice_plot(model.itr, test, i) -->
+<!-- print(ice_plot) -->
+<!-- } -->
+
+
+<!-- learning_curve_plot <- h2o.learning_curve_plot(model.itr) -->
+<!-- learning_curve_plot -->
+<!-- ``` -->
+
+# computing environment
+```{r}
+end_time <- Sys.time()
+# total processing time ---------------------
+end_time - start_time
+h2o.shutdown(prompt = FALSE)
+sessionInfo()
+```

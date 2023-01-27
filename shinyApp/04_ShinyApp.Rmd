@@ -1,0 +1,366 @@
+---
+title: "Prediction of microlithiasis"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    theme: cosmo
+    orientation: rows
+---
+<style>                     
+.navbar {
+  background-color:#003D79;
+  border-color:white;
+}
+.navbar-brand {
+color:white!important;
+}
+</style>   
+
+<style type="text/css">
+
+.chart-title {  /* chart_title  */
+   font-size: 15px
+
+</style>
+
+```{r setup, include=FALSE}
+# load required packages
+requirePackages <- c("dplyr", "tidyr", "ggplot2", "ggbeeswarm", "h2o", "lime", "flexdashboard", "shiny", "here")
+loadPackages <- function(x) {
+  for(i in 1:length(x)){
+    if((x[i] %in% .packages(all.available=TRUE)) == TRUE) {
+      eval(parse(text=paste("require(", x[i], ")", sep="")))
+    } else {
+      eval(parse(text=paste("install.packages('", x[i], "')", sep="")))
+    }
+  }
+}
+# load packages --------
+loadPackages(requirePackages)
+
+# set working directory
+here::here()
+
+# basic theme  -----------
+ggplot_theme <- theme_bw() +
+  theme(axis.line = element_line(size=0.75), axis.text = element_text(size=11, face="bold", colour = "black"), 
+        axis.title = element_text(size=12, face="bold"),
+        plot.title = element_text(size = 30, face = "bold")) +
+  theme(legend.position = "bottom")
+
+# initiate h2o -----------
+# Sys.setenv(JAVA_HOME = "/dss/dsshome1/lxc00/ru64waf2/bin/jdk-13.0.2")
+h2o.init()
+h2o.no_progress()
+h2o.removeAll()
+# load model --------------
+model <-
+  h2o.loadModel("GBM_grid__1_AutoML_20220706_153327_model_2")
+# model class -------------
+class(model)
+# variable importance table -------------
+loess.Table <- as.data.frame(model@model$variable_importances)
+# load lime explainer--------
+explainer <- readRDS("explainer")
+```
+
+
+```{r}
+# generate simulated values
+test.sim <- reactive(
+    data.frame(
+      `Chr_GENERAL_Age` = input[["Chr_GENERAL_Age"]],
+      `Chr_GENERAL_Sex` = input[["Chr_GENERAL_Sex"]],
+      `Chr_GENERAL_Triglyzeride` = input[["Chr_GENERAL_Triglyzeride"]],
+      `Chr_GENERAL_Natrium` = input[["Chr_GENERAL_Natrium"]],
+      `Chr_GENERAL_GPT_ALT` = input[["Chr_GENERAL_GPT_ALT"]],
+      `Chr_GENERAL_Erythrozyten` = input[["Chr_GENERAL_Erythrozyten"]],
+      `Chr_GENERAL_Kalium` = input[["Chr_GENERAL_Kalium"]],
+      `Chr_GENERAL_TSH` = input[["Chr_GENERAL_TSH"]],
+      `Chr_GENERAL_Eiwei_Egesamt` = input[["Chr_GENERAL_Eiwei_Egesamt"]],
+      `Chr_GENERAL_Leukozyten` = input[["Chr_GENERAL_Leukozyten"]],
+      check.names = FALSE) %>%
+      mutate_if(is.character, as.factor)
+)
+
+# get SHAP_values
+SHAP_values <- reactive(
+  {
+    predict_contributions.H2OModel(model, as.h2o(test.sim()))
+  }
+)
+# shap dataframe
+shap_df <- reactive(
+  {
+    SHAP_values() %>%
+      as.data.frame(check.names = FALSE) %>%
+      select(-BiasTerm) %>%
+      gather(feature, shap_value) %>%
+      group_by(feature) %>%
+      mutate(shap_importance = mean(abs(shap_value)),
+             shap_force = mean(shap_value)) %>% 
+      ungroup() %>%
+      filter(feature %in% loess.Table$variable) %>%
+      mutate(feature =  gsub("Chr_", "",feature)) 
+      
+  }
+)
+# get prediction
+Prediction <- reactive(
+  h2o.predict(model, as.h2o(test.sim())) %>%
+    as.data.frame()
+)
+
+# get probability
+Probability <- reactive(
+  h2o.predict(model, as.h2o(test.sim())) %>%
+    as.data.frame()
+)
+
+# get odds
+
+odds <- reactive(
+  Probability()$microlithiasis/(1- Probability()$microlithiasis)
+)
+
+# get confidence
+Confidence <- reactive(
+  if (Prediction() == 1) {
+    -log(Probability()$microlithiasis)
+  } else {
+    -log(1-Probability()$microlithiasis)
+  }
+  
+)
+
+# get lime explanation
+explanation <- reactive(
+  explain(test.sim(), 
+         explainer, 
+          n_labels  = 1, 
+          n_features = 14,
+          n_permutations =10000)
+)
+
+```
+
+Sidebar {.sidebar}
+======================================================================
+Values at the Baseline
+
+### Patients characteristics
+```{r}
+numericInput(inputId = "Chr_GENERAL_Age",
+            label = "Age",
+            50)
+selectInput(inputId = "Chr_GENERAL_Sex", 
+            label = "Gender",
+            list("Male" = "M", "Female" = "F"))
+```
+
+### Complete Blood Count
+```{r}
+selectInput(inputId = "Chr_GENERAL_Erythrozyten", 
+            label = "RBC count",
+            list( "4.54 - 5.77 T/l(Male), 3.96 - 5.16T/l (Female)" = "WL",
+                  "< 4.54T/l(Male), < 3.96T/l (Female)" = "LLN",
+                  "> 5.77T/l(Male), > 5.16T/l (Female)" = "ULN",
+                  "Unknown" = NA))
+selectInput(inputId = "Chr_GENERAL_Leukozyten", 
+            label = "WBC count",
+            list( "3.9 - 9.8G/l (Female), 4 - 10.4G/l (Female)" = "WL",
+                  "< 3.9G/l(Male), < 4G/l (Female)" = "LLN",
+                  "> 9.8G/l(Male), > 10.4T/l (Female)" = "ULN",
+                  "Unknown" = NA))
+```
+
+### Clinical lab measurement
+```{r}
+selectInput(inputId = "Chr_GENERAL_Triglyzeride", 
+            label = "Triglycerides",
+            list( "0 - 150 mmol/L" = "WL",
+                  "> 150 mmol/L" = "ULN",
+                  "Unknown" = NA))
+
+selectInput(inputId = "Chr_GENERAL_Natrium", 
+            label = "Sodium",
+            list( "135 - 145 mmol/L" = "WL",
+                  "< 135 mmol/L" = "LLN",
+                  "> 145 mmol/L" = "ULN",
+                  "Unknown" = NA))
+
+selectInput(inputId = "Chr_GENERAL_GPT_ALT", 
+            label = "GPT/ALT",
+            list( "0 - 34 U/L (Female), 0 - 49 U/L (Male)" = "WL",
+                  "> 34 U/L (Female), > 49 U/L (Male)" = "ULN",
+                  "Unknown" = NA))
+
+selectInput(inputId = "Chr_GENERAL_Kalium", 
+            label = "Potassium",
+            list( "3.5 - 5.1 mmol/L" = "WL",
+                  "< 3.5 mmol/L" = "LLN",
+                  "> 5.1 mmol/L" = "ULN",
+                  "Unknown" = NA))
+
+selectInput(inputId = "Chr_GENERAL_TSH", 
+            label = "TSH",
+            list( "0.27 - 0.42 mU/L" = "WL",
+                  "< 0.27 mU/L" = "LLN",
+                  "> 0.42 mU/L" = "ULN",
+                  "Unknown" = NA))
+
+selectInput(inputId = "Chr_GENERAL_Eiwei_Egesamt", 
+            label = "Total Proteins",
+            list( "4 - 7.6 g/dL" = "WL",
+                  "< 4 g/dL" = "LLN",
+                  "> 17.6 g/dL" = "ULN",
+                  "Unknown" = NA))
+
+actionButton("run", "Run Model")
+```
+
+
+Predictor {data-icon="fa-signal"}
+======================================================================
+Row
+-----------------------------------------------------------------------
+
+### odds ratio for Microlithiasis
+
+```{r}
+renderValueBox(
+  valueBox(round(odds(),1),
+           color = ifelse(odds() <1, "green", "red"))
+)
+```
+
+<!-- ### Probability of Uncomplicated Phase -->
+
+<!-- ```{r} -->
+<!-- renderValueBox( -->
+<!--   valueBox(paste0(round(Probability.leoss()$p0,5) * 100, "%"), -->
+<!--            color= ifelse(Probability.leoss()$p0 < 0.25, "red", -->
+<!--                          ifelse(Probability.leoss()$p0 >= 0.25 & Probability.leoss()$p0 < 0.5, "orange", -->
+<!--                                 ifelse(Probability.leoss()$p0 >= 0.5 & Probability.leoss()$p0 < 0.65, "dodgerblue", "green"))) -->
+<!--   ) -->
+<!-- ) -->
+<!-- ``` -->
+
+
+### Probability of Microlithiasis
+
+```{r}
+renderValueBox(
+  valueBox(paste0(round(Probability()$microlithiasis,2) * 100, "%"),
+           color= ifelse(Probability()$microlithiasis < 0.25, "green",
+                         ifelse(Probability()$microlithiasis >= 0.25 & Probability()$microlithiasis < 0.5, "dodgerblue",
+                                ifelse(Probability()$microlithiasis >= 0.5 & Probability()$microlithiasis < 0.65, "orange", "red")))
+  )
+)
+```
+
+<!-- ### Logloss -->
+
+<!-- ```{r} -->
+<!-- renderValueBox( -->
+<!--   valueBox(round(Confidence.leoss(),5), -->
+<!--            color = ifelse(Confidence.leoss() <0.69, "green", "red"), -->
+<!--            icon = ifelse(Confidence.leoss() <0.69, "fa-thumbs-o-up", -->
+<!--                          "fa-frown-o")) -->
+<!-- ) -->
+<!-- ``` -->
+
+<!-- ### Comments -->
+
+<!-- ```{r} -->
+<!-- renderValueBox( -->
+<!--   valueBox(ifelse(Prediction.leoss()$predict==1 & Probability.leoss()$p0 > 0.5 |  -->
+<!--                     Prediction.leoss()$predict==0 & Probability.leoss()$p1 > 0.5, "misclassification of patients", -->
+<!--                   "true classification of patients"), -->
+<!--            color = "dodgerblue", -->
+<!--            icon = ifelse(Prediction.leoss()$predict==1 & Probability.leoss()$p0 > 0.5 |  -->
+<!--                            Prediction.leoss()$predict==0 & Probability.leoss()$p1 > 0.5, "fa-hospital-o", -->
+<!--                          "fa-ambulance")) -->
+<!-- ) -->
+<!-- ``` -->
+
+### Predictor recommendation
+
+```{r}
+renderValueBox(
+  valueBox(ifelse(Prediction()$predict=="other", "others causes of Pancreatitis",
+                  "Microlithiasis"),
+           color = ifelse(Prediction()$predict=="other", "green", "red")
+  )
+)
+```
+
+
+Row
+-----------------------------------------------------------------------
+<font size="5">**"Important notice: For scientific use only. This is not a medical product."**</font>
+
+
+Row
+-----------------------------------------------------------------------
+# Explanation {data-icon="fa fa-line-chart"}
+
+```{r}
+renderPlot (
+  {
+    p2 <- plot_features(explanation()) +
+      ggtitle("Explanation") +
+      scale_fill_manual(values = c("green4", "firebrick")) +
+      ggplot_theme
+    
+    print(p2)
+  }
+)
+```
+
+# Variable importance {data-icon="fa fa-pie-chart"}
+
+```{r}
+renderPlot(
+  {
+    p <- shap_df() %>% 
+      select(feature, shap_importance) %>%
+      distinct() %>% 
+      ggplot(aes(x = reorder(feature, shap_importance), y = shap_importance, fill = shap_importance)) +
+      geom_col() +
+      coord_flip() +
+      xlab(NULL) +
+      ylab("mean(|SHAP value|)") +
+      ggtitle("Impact on output magnitude") +
+      scale_fill_gradient(low = "firebrick1", high = "green4") +
+      labs(fill="SHAP importance") +
+      ggplot_theme
+    
+    print(p)
+  }
+)
+```
+
+# Variables force-plot {data-icon="fa fa-arrows-h"}
+
+```{r}
+
+renderPlot (
+  { 
+    p1 <- shap_df() %>% 
+      select(feature, shap_importance, shap_force) %>%
+      distinct() %>% 
+      mutate(color = ifelse(shap_force < 0, 'Negative', 'Positive')) %>% 
+      ggplot(aes(x = reorder(feature, shap_importance), y = shap_force, fill = color)) +
+      geom_col() +
+      scale_fill_manual("SHAP force", values = c("Negative" = "firebrick", "Positive" = "green4")) + 
+      coord_flip() +
+      xlab(NULL) +
+      ylab("mean(|SHAP value|)") +
+      ggtitle("Direction of impact on output magnitude") +
+      ggplot_theme 
+    
+    print(p1)
+  }
+)
+```

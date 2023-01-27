@@ -1,0 +1,265 @@
+---
+title: "Microlithiasis predictive score"
+subtitle: "__(Compile dataset)__"
+author: "_umahajan_"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document: default
+  code_folding: hide
+subtitle: __"data merging & cleaning for ML"__
+number_sections: yes
+toc: yes
+toc_depth: 4
+---
+
+
+
+```{r setup, include=FALSE}
+chooseCRANmirror(graphics = TRUE, ind = 1)
+knitr::opts_chunk$set(
+tidy.opts = list(width.cutoff = 85),
+tidy = TRUE,
+echo = TRUE,
+warning = FALSE,
+message = FALSE
+)
+```
+
+# load packages
+```{r}
+# load packages -----------------------------------
+scriptLibraries <-  c("here", "dplyr", "janitor", "readr")
+# scripts ------------------------------
+installScriptLibs <- function(x) {
+  for (i in 1:length(x)) {
+    if ((x[i] %in% .packages(all.available = TRUE)) == TRUE) {
+      eval(parse(text = paste("require(", x[i], ")", sep = "")))
+    } else {
+      eval(parse(text = paste(
+        "install.packages('", x[i], "')", sep = ""
+      )))
+    }
+  }
+}
+
+# load packages ------------
+installScriptLibs(scriptLibraries)
+```
+
+# set working directory
+```{r, include=FALSE}
+here()
+```
+
+# merge files
+```{r, warning=FALSE}
+# merge Microlithiasis files ------------
+
+listFilesMicrolithiasis <-
+  list.files(path = "../raw_data/database", pattern = "*.csv")
+
+listMicrolithiasis <- list()
+
+for (i in seq_along(listFilesMicrolithiasis)) {
+  csvFile <-
+    read.csv(
+      paste0("../raw_data/database/", listFilesMicrolithiasis[i]),
+      stringsAsFactors = FALSE,
+      fileEncoding = "latin1",
+      sep = ";",
+      na.strings = c("", NA)
+    )
+  ## delete last two rows with description
+  n <- dim(csvFile)[1]
+  csvFile <- csvFile[1:(n - 2), ]
+  
+  
+  ## convert to Numeric
+  for (l in 1:nrow(csvFile)) {
+    csvFile[l, 2] <-
+      gsub("^([0-9]+),([0-9]+)$", "\\1.\\2", csvFile[l, 2])
+    csvFile[l, 2] <- gsub(",", ".", csvFile[l, 2])
+    value <- as.numeric(as.character(csvFile[l, 2]))
+    
+    if (is.na(value) == TRUE) {
+      if (grepl("Sex", csvFile[l, 1])) {
+        csvFile[l, 2] <- gsub("MÊ", "M", csvFile[l, 2])
+      }
+      csvFile[l, 2] <- gsub("Ê-Ê", "_", csvFile[l, 2])
+      csvFile[l, 2] <- gsub("MÊ |MÊ", "", csvFile[l, 2])
+    } else
+      
+      csvFile[l, 2] <- value
+    
+    ### clear names column....
+    csvFile[l, 3] <-
+      paste(csvFile[l, 3], make_clean_names(csvFile[l, 1], "parsed"), sep = "_")
+    csvFile[l, 3] <- gsub("_E_|E_", "_", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_H_", "_He", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_37", "", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("n_abs", "n", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("z_abs", "zyten", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_Basophileae_", "_Basophile_", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_Eosinophileae_", "_Eosinophile_", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_Neutrophileae_", "_Neutrophile_", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_Granulozytenae_", "_Granulozyten_", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_a_PT_Tae_", "_a_PTT_", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Anorg_ae_", "_Anorg_", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_EW_", "_Eiw_", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Calciumae_", "_Calcium_", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("Lupus", "LA", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("Alkalische", "Alk", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Alkae", "_Alk", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Edirektes", "_Edirekt", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_aedirekt", "_Edirekt", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_aegesamt", "_Egesamt", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_Massenkonzentration", "_Masse", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_CK_Gesamt", "_Creatinkinase_CK", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_Creatinkinaseae_", "_Creatinkinase_", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Freies_", "_freies_", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_Gamma_G_TaeA", "_Gamma_GT", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_GF_Rae_CKD_EPI", "_GFR_CKD_EPI", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_MDRD_Mabb", "_Epro_E1_73Eqm_Mabb", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Blutzucker", "_Glucose", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_GLDH", "_LDH", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_GO_Tae_", "_GOT_", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_GP_Tae_", "_GPT_", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("ALT_aeA", "ALT", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("h_CG_Schnelltest|HCG_Schnelltest", "HCG", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Eim_Serum", "", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Jaff", "", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_Kreatininae", "_Kreatinin", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_LD_HaeA", "_LDH", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Friedewald", "", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("L_PTT", "L_a_PTT_LA_sensitiv", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("perBlood_Basophile",
+           "perBlood_Basophile_Granulozyten",
+           csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub(
+        "perBlood_Basophile_Granulozyten_Granulozyten",
+        "perBlood_Basophile_Granulozyten",
+        csvFile[l, 3]
+      )
+    csvFile[l, 3] <-
+      gsub("perBlood_Eosinophile",
+           "perBlood_Eosinophile_Granulozyten",
+           csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub(
+        "perBlood_Eosinophile_Granulozyten_Granulozyten",
+        "perBlood_Eosinophile_Granulozyten",
+        csvFile[l, 3]
+      )
+    csvFile[l, 3] <-
+      gsub("_Normoblastenae_", "_Normoblasten_", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_percent_ae_Albumin", "_percent_Albumin", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("Blut_Blut|Blut_E", "Blut", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_p_HeWert|_ph_Wert", "_pH", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Sediment", "sediment", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_Transferrins_ttigung", "_Transferrin", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_Troponinae_Tae_hs", "_Troponin_ET_hs", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Eiweiss", "_Eiwei", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_Spez_ae_", "_Spez_", csvFile[l, 3])
+    csvFile[l, 3] <- gsub("_spez_", "_Spez_", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_URIN_Urinsediment", "_URIN_SED_Urinsediment", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_C_reakt_Prot|_C_reakt_Prot_hs", "_CRP", csvFile[l, 3])
+    csvFile[l, 3] <-
+      gsub("_DDB", "_DBB", csvFile[l, 3])
+  }
+  
+
+  ## remove duplicated rows
+  j <-
+    !(duplicated(csvFile[[3]]) &
+        duplicated(csvFile[[3]], fromLast = TRUE))
+  k <- !is.na(csvFile[[2]])
+  
+  csvFile <- csvFile[j & k,]
+  
+  listMicrolithiasis[[i]] <- csvFile[, 2:3]
+}
+
+mergeMicrolithiasis <-
+  Reduce(function(x, y)
+    merge(x, y, all = TRUE, by = "Identifier"),
+    listMicrolithiasis)
+
+## remove duplicated rows
+mergeMicrolithiasis <-
+  mergeMicrolithiasis[!duplicated(mergeMicrolithiasis$Identifier), ]
+
+### delete info rows
+infoColumns <-
+  c(
+    "Chr_GENERAL_Differential_BB_maschinell",
+    "Chr_GENERAL_Endokrinologie_Spezialanalytik",
+    "Chr_GENERAL_Gerinnung_Spezial",
+    "Chr_GENERAL_Hematologie",
+    "Chr_GENERAL_Kapillarzonen_Elektroph_Befund",
+    "Chr_GENERAL_Medikamentenspiegel_Cytokine",
+    "Chr_GENERAL_NA",
+    "Chr_GENERAL_Differential_B_Bae_maschinell",
+    "Chr_GENERAL_Hinweis_Ezur_Probe",
+    "Chr_GENERAL_Normoblastenae_maschinell",
+    "Chr_GENERAL_Notfall_Gerinnung",
+    "Chr_GENERAL_PSA_Efrei_EPSA_Eges_Roche",
+    "Chr_URIN_Urin_SM_Stuhl",
+    "Chr_GENERAL_Urin_SM_Stuhl",
+    "Chr_GENERAL_Immunologie_Proteinchemie",
+    "Chr_GENERAL_Elektrophorese",
+    "Chr_GENERAL_Proteinuriedifferenzierung",
+    "Chr_GENERAL_Zelldifferenzierung"
+  )
+
+mergeMicrolithiasis <-
+  mergeMicrolithiasis[!mergeMicrolithiasis[[1]] %in% infoColumns,]
+
+```
+
+# Clean data for ML
+```{r}
+origData <- t(mergeMicrolithiasis)
+colnames(origData) <- origData[1, ]
+origData <- origData[-c(1), ] ## remove column names
+origData <- cbind(origData, PatientID = rownames(origData))
+rownames(origData) <- c() ## remove row names
+
+### clear patient ids
+origData[, "PatientID"] <- gsub("X00", "", origData[, "PatientID"])
+origData[, "PatientID"] <-
+  readr::parse_number(origData[, "PatientID"])
+
+## convert to dataframe
+origData <- data.frame(origData)
+
+dim(origData)
+
+write.csv(origData, "../Data/origData_microlithiasis.csv")
+```
+
+# session information
+```{r}
+sessionInfo()
+```
+
+**email: umahajan@med.lmu.de**

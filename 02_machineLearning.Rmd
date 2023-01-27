@@ -1,0 +1,554 @@
+---
+title: "Microlithiasis predictive score"
+subtitle: "__(machine learning AutoML)__"
+author: "_umahajan_"
+date:  "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_notebook: 
+    toc: yes
+    toc_depth: 4
+    code_folding: hide
+    number_sections: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+chooseCRANmirror(graphics = TRUE, ind = 1)
+knitr::opts_chunk$set(
+  tidy.opts = list(width.cutoff = 85),
+  tidy = TRUE,
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  cache = FALSE
+)
+```
+
+# data preparation
+
+```{r packages}
+rm(list = ls())
+##---------------------------------------------------------------
+##                      required packages                      --
+##---------------------------------------------------------------
+scriptLibraries <-  c(
+  "here",
+  "dplyr",
+  "openxlsx",
+  "janitor",
+  "rmarkdown",
+  "knitr",
+  "kableExtra",
+  "tidyr",
+  "ggplot2",
+  "ggridges",
+  "arsenal",
+  "RColorBrewer",
+  "h2o",
+  "caret",
+  "lime",
+  "ggpubr",
+  "sjPlot",
+  "fmsb",
+  "auctestr",
+  "purrr",
+  "tibble"
+)
+##---------------------------------------------------------------
+##                      load functions                         --
+##---------------------------------------------------------------
+source("~/r_functions/basicFunctions.R")
+source("~/r_functions/runH2Omodels.R") ## require to load h2o 
+##---------------------------------------------------------------
+##                        load packages                        --
+##---------------------------------------------------------------
+installScriptLibs(scriptLibraries)
+##----------------------------------------------------------------
+##                         basic themes                         --
+##----------------------------------------------------------------
+ggplot_theme <- theme_bw() +
+  theme(
+    axis.line = element_line(size = 0.75),
+    axis.text = element_text(
+      size = 11,
+      face = "bold",
+      colour = "black"
+    ),
+    axis.title = element_text(size = 12, face = "bold")
+  )
+##---------------------------------------------------------------
+##                    set working directory                    --
+##---------------------------------------------------------------
+here::here()
+```
+
+## load dataset and preparation for modelling
+```{r data, echo=FALSE}
+# load dataset ---------------------------------------------------------------------
+origData <- read.csv(
+  "./Data/origData_microlithiasis.csv",
+  sep = ",",
+  na.strings = c("", "NA")
+)
+# load metadata ==------------------------------------------------------------------
+origDataSupp <-
+  read.csv("./Data/Microlithiasis-Dataset-19-01-2021.csv")
+origDataSupp <- origDataSupp[, 1:4]
+origDataSupp <- origDataSupp[, !colnames(origDataSupp) %in% c("Age",
+                                                              "Sex",
+                                                              "ALT.U.l",
+                                                              "APT.sec",
+                                                              "EUS.finding",
+                                                              "ERCP.finding")]
+# set as factors ------------------------------------------------------------------
+origDataSupp <- origDataSupp %>%
+  mutate_each(funs(as.factor))
+# merge dataset -------------------------------------------------------------------
+origData <- merge(origData, origDataSupp, by = "PatientID")
+# remove patient id ---------------------------------------------------------------
+origData <- origData[, !colnames(origData) %in% "PatientID"]
+# remove patient id ---------------------------------------------------------------
+masterTable <- read.csv("./Data/MasterTable_updated.csv",
+                        sep = ",",
+                        na.strings = c("", "NA"))
+# categorize dataset---------------------------------------------------------------
+nCol <- ncol(origData)
+nRow <- ncol(origData)
+
+for (i in 1:nCol) {
+  varname = colnames(origData)[i]
+  
+  j = which(masterTable$Variables == varname)
+  
+  if (purrr::is_empty(j)) {
+    next
+  }
+  
+  if (class(origData[[varname]]) == "factor") {
+    banner(paste0(colnames(origData)[i]))
+    print(table(origData[[i]]))
+  }
+  
+  else if (masterTable[j, "Cat"] == "Y" &&
+           masterTable[j, "Gender"] == "NN") {
+    origData[, varname] = as.numeric(origData[, varname])
+    
+    origData[, varname] <-
+      ifelse(
+        origData[, varname] < as.numeric(as.character(masterTable[j, "lowerLimit"])) &
+          !is.na(origData[, varname]),
+        "LLN",
+        ifelse(
+          origData[, varname] > as.numeric(as.character(masterTable[j, "HigherLimit"])) &
+            !is.na(origData[, varname]),
+          "ULN",
+          ifelse(
+            origData[, varname] >= as.numeric(as.character(masterTable[j, "lowerLimit"])) &
+              origData[, varname] <= as.numeric(as.character(masterTable[j, "HigherLimit"])) &
+              !is.na(origData[, varname]),
+            "WL",
+            NA
+          )
+        )
+      )
+    
+    
+    banner(paste0(colnames(origData)[i]))
+    print(table(origData[, varname]))
+    
+  } else if (masterTable[j, "Cat"] == "Y" &&
+             masterTable[j, "Gender"] != "NN") {
+    origData.F <- origData[origData$Chr_GENERAL_Sex == "F",]
+    
+    if (length(j) != 1) {
+      prunnedMasterTable <- masterTable[j, ]
+      prunnedMasterTable <-
+        prunnedMasterTable[prunnedMasterTable$Gender == "F", ]
+    }
+    
+    
+    origData.F[, varname] = as.numeric(origData.F[, varname])
+    
+    origData.F[, varname] <-
+      ifelse(
+        origData.F[, varname] < as.numeric(as.character(
+          prunnedMasterTable[1, "lowerLimit"])) & !is.na(origData.F[, varname]),
+        "LLN",
+        ifelse(
+          origData.F[, varname] > as.numeric(as.character(
+            prunnedMasterTable[1, "HigherLimit"]
+          )) & !is.na(origData.F[, varname]),
+          "ULN",
+          ifelse(
+            origData.F[, varname] >= as.numeric(as.character(
+              prunnedMasterTable[1, "lowerLimit"]
+            )) &
+              origData.F[, varname] <= as.numeric(as.character(
+                prunnedMasterTable[1, "HigherLimit"]
+              )) & !is.na(origData.F[, varname]),
+            "WL",
+            NA
+          )
+        )
+      )
+    
+    banner(paste0(colnames(origData.F)[i], "== Female"))
+    print(table(origData.F[, varname]))
+    
+    
+    origData.M <- origData[origData$Chr_GENERAL_Sex == "M",]
+    
+    if (length(j) != 1) {
+      prunnedMasterTable <- masterTable[j, ]
+      prunnedMasterTable <-
+        prunnedMasterTable[prunnedMasterTable$Gender == "M", ]
+    }
+    
+    
+    
+    origData.M[, varname] = as.numeric(origData.M[, varname])
+    
+    origData.M[, varname] <-
+      ifelse(
+        origData.M[, varname] < as.numeric(as.character(
+          prunnedMasterTable[1, "lowerLimit"]
+        )) & !is.na(origData.M[, varname]),
+        "LLN",
+        ifelse(
+          origData.M[, varname] > as.numeric(as.character(
+            prunnedMasterTable[1, "HigherLimit"]
+          )) & !is.na(origData.M[, varname]),
+          "ULN",
+          ifelse(
+            origData.M[, varname] >= as.numeric(as.character(
+              prunnedMasterTable[1, "lowerLimit"]
+            )) &
+              origData.M[, varname] <= as.numeric(as.character(
+                prunnedMasterTable[1, "HigherLimit"]
+              )) & !is.na(origData.M[, varname]),
+            "WL",
+            NA
+          )
+        )
+      )
+    
+    banner(paste0(colnames(origData.M)[i], "== Male"))
+    print(table(origData.M[, varname]))
+    
+    origData <- rbind(origData.F, origData.M)
+    
+    banner(paste0(colnames(origData)[i]))
+    print(table(origData[, varname]))
+    
+  } else if (masterTable[j, "Cat"] == "M") {
+    origData[, varname] <- as.character(origData[, varname])
+    
+    origData[, varname] <- ifelse(is.na(origData[, varname]),
+                                  NA,
+                                  ifelse(origData[, varname] %in% "0", "normal", "abnormal"))
+    
+    
+    banner(paste0(colnames(origData)[i]))
+    print(table(origData[, varname]))
+  }
+  
+}
+
+# define diagnosis ------------------------
+origData$Diagnosis <-
+  ifelse(origData$Chr_GENERAL_Etiology %in% "microlithiasis",
+         "microlithiasis",
+         "other")
+
+# define diagnosis ------------------------
+origData <-
+  origData[,!colnames(origData) %in% "Chr_GENERAL_Etiology"]
+
+origData <- as.data.frame(unclass(origData))
+
+## columns with more than 25% NA
+print("variables with more that 25% missing --------------------------------")
+print(names(which(colMeans(is.na(
+  origData
+)) > 0.25)))
+
+## remove columns with more than 25% NA
+origData <- origData[, which(colMeans(!is.na(origData)) > 0.25)]
+
+# zero varience function --------------------------------------------------
+#ref: https://stats.stackexchange.com/questions/221332/variance-of-a-distribution-of-multi-level-categorical-data
+ncol = ncol(origData)
+zeroVarienceColumn <- c()
+
+for (i in 1:ncol) {
+  varname <- colnames(origData)[i]
+  
+  if (class(origData[[i]]) == "factor") {
+    origData[[i]] <- droplevels(origData[[i]])
+    px <- table(origData[[i]]) / length(origData[[i]])
+    lpx <- log(px, base = 2)
+    entropy <- -sum(px * lpx)
+    
+    if (entropy == 0) {
+      zeroVarienceColumn[length(zeroVarienceColumn) + 1] <- varname
+    }
+    
+  } else if (class(origData[[i]]) %in% c('integer', 'numeric')) {
+    varience <- var(origData[[i]][!is.na(origData[[i]])])
+    
+    if (varience == 0) {
+      zeroVarienceColumn[length(zeroVarienceColumn) + 1] <- varname
+    }
+  }
+}
+
+banner("columns with zero variences")
+zeroVarienceColumn
+
+# delete columns with zero varience --------------------------------------------------
+origData <- origData[, !colnames(origData) %in% zeroVarienceColumn]
+
+# near zero varience function --------------------------------------------------
+# ref: https://github.com/topepo/caret/blob/master/pkg/caret/R/nearZeroVar.R
+nearZeroVarience <- function (x,
+                              freqCut = 95 / 5,
+                              uniqueCut = 10,
+                              saveMetrics = FALSE,
+                              names = FALSE) {
+  if (is.null(dim(x)))
+    x <- matrix(x, ncol = 1)
+  freqRatio <- apply(x, 2, function(data)
+  {
+    t <- table(data[!is.na(data)])
+    if (length(t) <= 1) {
+      return(0)
+      
+    }
+    w <- which.max(t)
+    
+    return(max(t, na.rm = TRUE) / max(t[-w], na.rm = TRUE))
+  })
+  lunique <-
+    apply(x, 2, function(data)
+      length(unique(data[!is.na(data)])))
+  percentUnique <- 100 * lunique / apply(x, 2, length)
+  zeroVar <-
+    (lunique == 1) | apply(x, 2, function(data)
+      all(is.na(data)))
+  if (saveMetrics)
+  {
+    out <- data.frame(
+      freqRatio = freqRatio,
+      percentUnique = percentUnique,
+      zeroVar = zeroVar,
+      nzv = (freqRatio > freqCut &
+               percentUnique <= uniqueCut) | zeroVar
+    )
+  }
+  else {
+    out <-
+      which((freqRatio > freqCut &
+               percentUnique <= uniqueCut) | zeroVar)
+    names(out) <- NULL
+    if (names) {
+      out <- colnames(x)[out]
+    }
+  }
+  out
+}
+
+nearZeroVarienceColumn <- nearZeroVarience(origData, names = TRUE)
+
+banner("columns with near zero variences")
+nearZeroVarienceColumn
+# delete columns with near zero varience -------------------------------------------
+origData <-
+  origData[, !colnames(origData) %in% nearZeroVarienceColumn]
+# load inpatient data --------------------------------------------------------------
+colnames(origData) <- make.unique(names(origData))
+# filters variables with Amylase, MRT, GFR -----------------------------------------
+vectors <- c("_Amylase", "_GFR_", "MRT", "PTT", "_MPV", "_PDW", "Diabetes", "Glucose")
+origData <-
+  origData[, !grepl(paste(vectors, collapse = "|"), colnames(origData))]
+```
+
+# Exploratory data analysis
+```{r eda}
+# graphical distribution ----------------------
+origData %>%
+  ggplot(aes(x = Diagnosis, fill = Diagnosis)) +
+  geom_bar() +
+  guides(fill = FALSE) +
+  scale_fill_manual(values = c("dodgerblue", "firebrick1")) +
+  geom_label(stat='count',aes(label=..count..), size=10) +
+  ggplot_theme +
+  theme(axis.text = element_text(size=16),
+        axis.title = element_text(size = 16)) +
+  xlab("")
+```
+
+# Distribution
+```{r demographics}
+table <- tableby(Diagnosis ~., data = origData)
+table <- as.data.frame(summary(table))
+table[,1] <- gsub("&nbsp;&nbsp;&nbsp;", "", table[,1])
+table[,1]<- gsub("[**]", "", table[,1])
+colnames(table)[[1]] <- "variables"
+table
+```
+
+# autoML with default setup to generate model
+
+## initiate h2o
+```{r h2o}
+##----------------------------------------------------------------
+##             detect the number of cores available             --
+##----------------------------------------------------------------
+myCores = parallel::detectCores(all.tests = TRUE) - 1
+
+if (myCores > 20) {
+  myCores = 20
+} else
+  myCores = myCores
+
+
+memFreeG = 50
+# Sys.setenv(JAVA_HOME = "/dss/dsshome1/lxc00/ru64waf2/bin/jdk-13.0.2")
+##----------------------------------------------------------------
+##                         initiate h2o                         --
+##----------------------------------------------------------------
+h2o.init(
+  nthreads = myCores,
+  min_mem_size = paste(memFreeG, "g", sep = ""),
+  max_mem_size = paste(memFreeG, "g", sep = "")
+)
+h2o.no_progress()
+h2o.removeAll()
+```
+
+
+## split train and test data
+```{r split}
+origData[sapply(origData, is.character)] <- lapply(origData[sapply(origData, is.character)], 
+                                       as.factor)
+
+
+if (exists("origDataOneHot")) {
+  origDataOneHot <- origDataOneHot
+}
+origDataOneHot <- origData
+
+# define response variable ---------------------------------------------------------
+response <- "Diagnosis"
+# define features ------------------------------------------------------------------
+features <- setdiff(colnames(origDataOneHot), response)
+# Create training (90%) and test (10%) sets ----------------------------------------
+dat.h2o <- as.h2o(origDataOneHot)
+uc.split <- h2o.splitFrame(data = dat.h2o,
+                           ratios = 0.7,
+                           seed = 1234)
+
+path <- paste(here(), "/Data/splitData/", sep = "")
+
+if (dir.exists(path)) {
+  unlink(path, recursive = TRUE)
+}
+
+lapply(path, function(x)
+  if (!dir.exists(x))
+    dir.create(x))
+
+train <- h2o.assign(uc.split[[1]], "train")
+h2o.exportFile(train, paste(path, "train.csv", sep = ""))
+test <- h2o.assign(uc.split[[2]], "test")
+h2o.exportFile(test, paste(path, "test.csv", sep = ""))
+```
+## h2o results
+```{r res}
+ifelse(!dir.exists(file.path(paste0(here()), "h2o_results")),
+       dir.create(file.path(paste0(here()), "h2o_results")), 
+       FALSE)
+ifelse(!dir.exists(file.path(paste0(here()), "h2o_results/base")),
+       dir.create(file.path(paste0(here()), "h2o_results/base")), 
+       FALSE)
+ifelse(!dir.exists(file.path(paste0(here()), "h2o_results/iteration")),
+       dir.create(file.path(paste0(here()), "h2o_results/iteration")), 
+       FALSE)
+ifelse(!dir.exists(file.path(paste0(here()), "h2o_results/feature_reduction")),
+       dir.create(file.path(paste0(here()), "h2o_results/feature_reduction")), 
+       FALSE)
+ifelse(!dir.exists(file.path(paste0(here()), "h2o_results/leave_one_out")),
+       dir.create(file.path(paste0(here()), "h2o_results/leave_one_out")), 
+       FALSE)
+```
+
+## select h2o model
+
+```{r h2o fun}
+time <- 60*60
+## base model
+banner("base model")
+base <- runBaseModel(train = train,
+                     test = test,
+                     features = features,
+                     response = response,
+                     time = time,
+                     exclude_algos = c("DeepLearning", "StackedEnsemble", "XGBoost", "DRF", "GLM"),
+                     save.location = paste0(here(),"/h2o_results/base/"), cutoff_metric = "f1")
+## plot
+p <- base$plot
+print(p)
+save_plot(
+  "h2o_varImp_base.svg",
+  fig = p,
+  width = 15,
+  height = 9,
+  dpi = 300
+)
+## lederboard
+head(base$leaderboard)
+## model performance
+base$performance
+## summary
+tab_df(base$result)
+## cross validation score
+tab_df(base$cv.results)
+
+## iteration model
+banner("iterative model")
+iteration <- runIterativeModel(model = base$model,
+                               train,
+                     test = test,
+                     features = features,
+                     response = response,
+                     time = time,
+                     save.location = paste0(here(),"/h2o_results/iteration/"),
+                     cutoff_metric = "f1")
+
+## plot
+p <- iteration$plot
+print(p)
+save_plot(
+  "h2o_varImp_itr.svg",
+  fig = p,
+  width = 15,
+  height = 9,
+  dpi = 300
+)
+## summary
+iteration$result
+## model performance
+iteration$performance
+## summary
+iteration$confusionMatrix
+## cross validation score
+tab_df(iteration$cv.results)
+```
+
+# computing environment
+```{r}
+# total processing time ---------------------
+h2o.shutdown(prompt = FALSE)
+sessionInfo()
+```
